@@ -1,0 +1,218 @@
+﻿@page "/meets"
+
+<PageTitle>Meets</PageTitle>
+
+@using ForRS.Data
+@using ForRS.Data.Database
+@using Npgsql
+@using System.Collections.Generic;
+@inject IJSRuntime JsRuntime
+@inject MeetService MeetCastService
+
+<h1>Список ваших встреч</h1>
+ <div class="container">
+     <partial name="_LoginPartial" />
+
+     <form class="form-floating">
+    <input type="text" @bind="@_rendezvous.Title" class="form-control">
+    <label >Введите название встречи</label>
+    </form>
+    <form class="form-floating">
+        <input type="datetime-local" @bind="@_rendezvous.StartMeet" class="form-control">
+    <label >Введите время встречи</label>
+    </form>
+    <form class="form-floating">
+        <input type="datetime-local" @bind="@_rendezvous.EndMeet" class="form-control">
+    <label >Введите окончание встречи</label>
+    </form>
+    <form class="form-floating">
+        <input type="number" @bind="@_rendezvous.Alert" class="form-control">
+    <label >Предупредить за мин.</label>
+    </form>
+    <p></p>
+    <button type="button" class="btn btn-primary" @onclick="AddNewMeet" >Добавить</button>
+    <button type="button" class="btn btn-primary" @onclick="() => SaveСhangesMeet(_element)">Сохранить</button>
+ </div>
+  <p></p>
+@if (_meets == null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <table class="table"> 
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Встреча</th>
+                <th>Начало</th>
+                <th>Конец</th>
+                <th>Предупредить за</th>
+                <th></th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var meet in _meets)
+            {                
+             <tr>                
+                <td>@(_meets.IndexOf(meet)+1)</td>                
+                <td>@meet.Title</td>
+                <td>@meet.StartMeet</td>
+                <td>@meet.EndMeet</td>
+                <td>@meet.Alert</td>
+                <td>
+                    <div class="btn-group" role="group" aria-label="Basic example">
+                        <button type="button" class="btn btn-primary btn-sm" @onclick="() => EditMeet(meet)">редактировать</button>
+                        <button type="button" class="btn btn-danger btn-sm" @onclick="() => DeleteMeet(meet)">удалить</button>
+                    </div>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+<p></p>
+    <button type="button" class="btn btn-primary" @onclick="UnloadToDoc">Экспорт в текстовый документ</button>
+}
+
+@code {
+    private int _element;
+    private List<Meet> _meets = new List<Meet>();
+    private Meet _rendezvous = new Meet();
+    WorkWithDB _workWithDB = new WorkWithDB();
+    GenerateRequests _genSQLRequests = new GenerateRequests();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _meets = await MeetCastService.GetMeetAsync();
+    }
+    /// <summary>
+    /// Метод добавляет новую встречу
+    /// </summary>
+    private void AddNewMeet()
+    {
+        if (!string.IsNullOrWhiteSpace(_rendezvous.Title) && !string.IsNullOrWhiteSpace(_rendezvous.StartMeet.ToString()) && !string.IsNullOrWhiteSpace(_rendezvous.EndMeet.ToString()) && !string.IsNullOrWhiteSpace(_rendezvous.Alert.ToString()))
+        {
+            if (_rendezvous.StartMeet < DateTime.Now)
+            {
+                Console.WriteLine("Живи настоящим а не прошлым!");
+                JsRuntime.InvokeVoidAsync("alert", "Живи настоящим а не прошлым!");
+            }
+            else
+            {
+                string sqlForCheck = _genSQLRequests.CheckMeet(_rendezvous.StartMeet, _rendezvous.EndMeet);
+                _workWithDB.OpenConnection();
+                int responseForCheck = _workWithDB.QuerySelectCheck(sqlForCheck);
+                _workWithDB.CloseConnection();
+                if (responseForCheck > 0)
+                {
+                    Console.WriteLine("Уже есть встреча на это время!");
+                    JsRuntime.InvokeVoidAsync("alert", "Уже есть встреча на это время!");
+                }
+                else
+                {
+                    _meets.Add(new Meet(_rendezvous.Title, _rendezvous.StartMeet, _rendezvous.EndMeet, _rendezvous.Alert));
+                    try
+                    {
+                        _workWithDB.OpenConnection();
+                        string sql = _genSQLRequests.AddMeet(_rendezvous.Title, _rendezvous.StartMeet, _rendezvous.EndMeet, _rendezvous.Alert);
+                        _workWithDB.QueryOther(sql);
+                        _workWithDB.CloseConnection();
+                    }
+                    catch (NpgsqlException ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                        _meets = new List<Meet>();
+                    }
+                }
+            }
+            ClearFields();
+        }
+    }       
+    /// <summary>
+    /// Удаляет указанную встречу
+    /// </summary>
+    /// <param name="meet">Выбранная встреча</param>
+    private void DeleteMeet(Meet meet)
+    {
+        _meets.Remove(meet);
+        try
+        {
+            _workWithDB.OpenConnection();
+            string sqlForDetete = _genSQLRequests.DeleteMeet(meet.Id);
+            _workWithDB.QueryOther(sqlForDetete);
+            _workWithDB.CloseConnection();
+        }
+        catch (NpgsqlException ex)
+        {
+            Console.WriteLine(ex.Message);
+        }
+    }
+    /// <summary>
+    /// Подгружает встречу из общего списка встреч для редактирования
+    /// </summary>
+    /// <param name="meet">Выбранная встреча</param>
+    private void EditMeet(Meet meet)
+    {
+        _element = _meets.IndexOf(meet);
+
+        _rendezvous.Title = meet.Title;
+        _rendezvous.StartMeet = meet.StartMeet;
+        _rendezvous.EndMeet = meet.EndMeet;
+        _rendezvous.Alert = meet.Alert;
+    }
+    /// <summary>
+    /// Сохраняет внесенные изменения
+    /// </summary>
+    /// <param name="_element"></param>
+    private void SaveСhangesMeet(int _element)
+    {
+        _meets[_element].Title = _rendezvous.Title;
+        _meets[_element].StartMeet = _rendezvous.StartMeet;
+        _meets[_element].EndMeet = _rendezvous.EndMeet;
+        _meets[_element].Alert = _rendezvous.Alert;
+
+        try
+        {
+            _workWithDB.OpenConnection();
+            string sqlForEdit = _genSQLRequests.EditMeet(_rendezvous.Title, _rendezvous.StartMeet, _rendezvous.EndMeet, _rendezvous.Alert, _meets[_element].Id);
+            _workWithDB.QueryOther(sqlForEdit);
+            _workWithDB.CloseConnection();
+        }
+        catch (NpgsqlException ex)
+        {
+            Console.WriteLine(ex.Message);
+        }
+        ClearFields(); 
+    }
+    /// <summary>
+    /// Метод очищает поля для ввода
+    /// </summary>
+    private void ClearFields()
+    {
+        _rendezvous = new Meet();
+    }
+    /// <summary>
+    /// Метод для выгрузки списка встреч в текстовый документ
+    /// </summary>
+    private void UnloadToDoc()
+    {
+        try
+        {
+            _workWithDB.OpenConnection();
+            string sqlForUnload = _genSQLRequests.GetMeets();
+            List<Meet> responseForUnload = _workWithDB.QuerySelect(sqlForUnload);
+            _workWithDB.CloseConnection();
+            StreamWriter sw = new StreamWriter("C:\\Test.txt", false);
+            foreach (Meet meet in responseForUnload)
+                sw.WriteLine($"{(responseForUnload.IndexOf(meet)+1),2}\t{meet.Title,20}\t{meet.StartMeet,25}\t{meet.EndMeet,25}\t{meet.Alert,10}");
+            sw.Close();
+            FileInfo f = new FileInfo(@"C:\\Test.txt");
+            FileStream s = f.Open(FileMode.Append, FileAccess.Read);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine("Exception: " + e.Message);
+        }
+    }
+}
